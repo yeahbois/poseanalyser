@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Real-Time Emoji Reaction</title>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; background: #f0f0f0; padding: 10px; margin: 0; }
+    h2 { color: #2c3e50; margin: 10px 0; }
+    .container { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; }
+    .camera-container, .reaction-container {
+        border: 2px solid #3498db;
+        padding: 10px;
+        background: #fff;
+        border-radius: 8px;
+    }
+    video, img { width: 480px; height: 360px; object-fit: cover; border-radius: 4px; }
+    button { padding: 10px 20px; font-size: 16px; background: #27ae60; color: white; border: none; border-radius: 4px; margin: 10px; cursor: pointer; }
+    button:disabled { background: #95a5a6; }
+    .status { font-weight: bold; margin: 10px; font-size: 18px; }
+    .error { color: red; margin: 10px; }
+  </style>
+</head>
+<body>
+  <h2>Real-Time Emoji Reaction</h2>
+  <div class="container">
+    <div class="camera-container">
+      <h3>📹 Your Camera</h3>
+      <video id="video" autoplay playsinline muted></video>
+    </div>
+    <div class="reaction-container">
+      <h3>🐵 Reaction</h3>
+      <img id="reaction" src="" alt="Reaction will appear here"/>
+    </div>
+  </div>
+  <div class="controls">
+    <button id="start">Start Detection</button>
+    <button id="stop" disabled>Stop Detection</button>
+  </div>
+  <div class="status" id="status">Click "Start Detection" to begin</div>
+  <div class="error" id="error"></div>
+
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script>
+    const video = document.getElementById('video');
+    const reactionImg = document.getElementById('reaction');
+    const statusEl = document.getElementById('status');
+    const errorEl = document.getElementById('error');
+    const startBtn = document.getElementById('start');
+    const stopBtn = document.getElementById('stop');
+
+    let stream = null;
+    let socket = null;
+    let isActive = false;
+    const FRAME_RATE = 20; // FPS
+
+    async function startCamera() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            facingMode: 'user' // Use front camera
+          }
+        });
+        video.srcObject = stream;
+        statusEl.textContent = "✅ Camera ready";
+        return true;
+      } catch (err) {
+        statusEl.textContent = "❌ Camera error: " + (err.message || 'permission denied');
+        errorEl.textContent = "Could not access the camera. Please grant permission.";
+        return false;
+      }
+    }
+
+    function stopCamera() {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+        video.srcObject = null;
+      }
+    }
+
+    function captureAndSend() {
+      if (!isActive || !stream) return;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.7); // Send as JPEG
+
+      socket?.emit('frame', {
+        image: dataUrl,
+        timestamp: performance.now()
+      });
+
+      setTimeout(captureAndSend, 1000 / FRAME_RATE);
+    }
+
+    startBtn.onclick = async () => {
+      if (!await startCamera()) return;
+
+      socket = io();
+
+      socket.on('connect', () => {
+        console.log('Connected to server with session ID:', socket.id);
+        statusEl.textContent = "📡 Sending video to server...";
+      });
+
+      socket.on('connect_error', (err) => {
+        statusEl.textContent = "🔌 Connection failed";
+        errorEl.textContent = "Could not connect to the server.";
+      });
+
+      socket.on('error', (data) => {
+        errorEl.textContent = "Server error: " + data.message;
+      });
+
+      socket.on('result', (data) => {
+        reactionImg.src = data.image; // Update reaction image
+        statusEl.textContent = "🐵 Reaction received!";
+      });
+
+      isActive = true;
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      errorEl.textContent = "";
+      captureAndSend();
+    };
+
+    stopBtn.onclick = () => {
+      isActive = false;
+      stopCamera();
+      if (socket) {
+        socket.disconnect();
+        socket = null;
+      }
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      statusEl.textContent = "Stopped. Click 'Start Detection' to begin again.";
+      reactionImg.src = "";
+    };
+  </script>
+</body>
+</html>
